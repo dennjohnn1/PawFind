@@ -62,6 +62,7 @@ export default function PetScreen() {
     ownerName: "",
     ownerPhone: "",
     ownerEmail: "",
+    ownerAddress: "", // ADDED: Owner address field
 
     vaccinations: [],
     allergies: "",
@@ -92,6 +93,7 @@ export default function PetScreen() {
       ownerName: "",
       ownerPhone: "",
       ownerEmail: "",
+      ownerAddress: "", // ADDED: Reset owner address
 
       vaccinations: [],
       allergies: "",
@@ -219,6 +221,7 @@ export default function PetScreen() {
       const profileRes = await AuthService.getUserProfile();
       let ownerName = "";
       let ownerPhone = "";
+      let ownerAddress = "";
 
       if (profileRes.success && profileRes.data) {
         const data = profileRes.data;
@@ -226,6 +229,22 @@ export default function PetScreen() {
           data.fullName ||
           `${data.firstName || ""} ${data.lastName || ""}`.trim();
         ownerPhone = data.phone || "";
+        // Get address from location object
+        ownerAddress = data.location?.address || "";
+        
+        // If address is not in location.address, try to build it from location components
+        if (!ownerAddress && data.location) {
+          const loc = data.location;
+          ownerAddress = [
+            loc.street,
+            loc.barangay,
+            loc.city,
+            loc.province,
+            loc.postalCode
+          ]
+            .filter(Boolean)
+            .join(", ");
+        }
       }
 
       setForm((prev) => ({
@@ -234,6 +253,7 @@ export default function PetScreen() {
         ownerName,
         ownerEmail: user.email || "",
         ownerPhone,
+        ownerAddress,
       }));
 
       setModalVisible(true);
@@ -249,19 +269,6 @@ export default function PetScreen() {
     try {
       const user = auth.currentUser;
       if (!user) throw new Error("User not logged in");
-
-      // Fetch user profile from Firestore
-      const profileRes = await AuthService.getUserProfile();
-      let ownerName = "";
-      let ownerPhone = "";
-
-      if (profileRes.success && profileRes.data) {
-        const data = profileRes.data;
-        ownerName =
-          data.fullName ||
-          `${data.firstName || ""} ${data.lastName || ""}`.trim();
-        ownerPhone = data.phone || "";
-      }
 
       // Format date for the picker - handle different date formats
       let formattedDateOfBirth = null;
@@ -324,10 +331,11 @@ export default function PetScreen() {
         photoUrl: pet.photoUrl || "",
         distinguishingMarks: pet.distinguishingMarks || "",
 
-        ownerId: user.uid,
-        ownerName: ownerName,
-        ownerEmail: user.email || "",
-        ownerPhone: pet.ownerPhone || ownerPhone || "",
+        ownerId: pet.ownerId || user.uid,
+        ownerName: pet.ownerName || "",
+        ownerEmail: pet.ownerEmail || user.email || "",
+        ownerPhone: pet.ownerPhone || "",
+        ownerAddress: pet.ownerAddress || "", // Use pet's existing address
 
         vaccinations: pet.vaccinations || [],
         allergies: pet.allergies || "",
@@ -409,6 +417,7 @@ export default function PetScreen() {
         ownerName: form.ownerName,
         ownerPhone: form.ownerPhone,
         ownerEmail: form.ownerEmail,
+        ownerAddress: form.ownerAddress, // Include owner address
         vaccinations: form.vaccinations,
         allergies: form.allergies,
         medicalNotes: form.medicalNotes,
@@ -454,7 +463,7 @@ export default function PetScreen() {
         await PetService.updatePet(petId, {
           certificate: {
             number: certificateNumber,
-            url: certificateUrl, // This is now the proper URL
+            url: certificateUrl,
             issuedAt: new Date(),
             issuedBy: "PawFind",
             status: "generated",
@@ -1168,6 +1177,12 @@ export default function PetScreen() {
               placeholder="Enter phone"
               value={form.ownerPhone}
               onChangeText={(text) => handleChange("ownerPhone", text)}
+            />
+            <CustomInput
+              label="Address"
+              placeholder="Enter your address"
+              value={form.ownerAddress}
+              onChangeText={(text) => handleChange("ownerAddress", text)}
             />
           </View>
         );

@@ -649,14 +649,12 @@ class CertificateService {
                     <div class="info-label">Phone Number</div>
                     <div class="info-value">${pet.ownerPhone || "Not provided"}</div>
                   </div>
-                  ${
-                    pet.ownerAddress
-                      ? `<div class="info-item full-width">
-                          <div class="info-label">Address</div>
-                          <div class="info-value">${pet.ownerAddress}</div>
-                        </div>`
-                      : ""
-                  }
+                  ${pet.ownerAddress ? `
+                    <div class="info-item full-width">
+                      <div class="info-label">Address</div>
+                      <div class="info-value">${pet.ownerAddress}</div>
+                    </div>
+                  ` : ""}
                 </div>
               </div>
 
