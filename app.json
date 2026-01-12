@@ -2,6 +2,43 @@
   "expo": {
     "name": "PawFind",
     "slug": "PawFind",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "icon": "./assets/images/pawfind-icon.png",
+    "splash": {
+      "image": "./assets/images/pawfind-splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/pawfind-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.pawfind.app", 
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyD4_GJDbrg6mXLMMM7jbvsTvZwH-wyYK-M"
+        }
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.pawfind.app", 
+      "config": {
+        "googleMapsApiKey": "AIzaSyD4_GJDbrg6mXLMMM7jbvsTvZwH-wyYK-M"
+      }
+    },
+    "plugins": [
+      "expo-font"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "ab673808-a634-414a-809e-de6c37399669"
+      }
+    }
   }
 }
