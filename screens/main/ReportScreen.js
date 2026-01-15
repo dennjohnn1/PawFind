@@ -9,9 +9,11 @@ import {
   Alert,
   Modal,
   Animated,
+  BackHandler,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, Feather } from "@expo/vector-icons";
 import tw from "twrnc";
 
 import CustomText from "../../components/CustomText";
@@ -19,13 +21,20 @@ import CustomInput from "../../components/CustomInput";
 import DateTimeSelector from "../../components/CustomDateTimeSelector";
 import LocationPicker from "../../components/LocationPicker";
 import PetSelector from "../../components/PetSelector";
+import PotentialMatchesModal from "../../components/PotentialMatchesModal";
+import FeedbackModal from "../../components/FeedbackModal";
 import { auth } from "../../firebase";
 import AuthService from "../../service/AuthService";
 import PetService from "../../service/PetService";
 import CloudinaryService from "../../service/CloudinaryService";
+import MatchingService from "../../service/MatchingService";
+import DraftService from "../../service/DraftService";
+import PetImageAnalysisService from "../../service/PetImageAnalysisService"; // Import AI service
 import * as ImagePicker from "expo-image-picker";
+import { useNavigation } from "@react-navigation/native";
 
 export default function ReportScreen({ route }) {
+  const navigation = useNavigation();
   const [myPets, setMyPets] = useState([]);
   const [selectedPetId, setSelectedPetId] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
@@ -35,44 +44,276 @@ export default function ReportScreen({ route }) {
   const [isPreFilled, setIsPreFilled] = useState(false);
   const [contactEditModal, setContactEditModal] = useState(false);
 
+  // Draft states
+  const [hasDraft, setHasDraft] = useState(false);
+  const [showDraftPrompt, setShowDraftPrompt] = useState(false);
+  const [draftLoading, setDraftLoading] = useState(false);
+
+  // Validation states
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Feedback modal states
+  const [feedbackVisible, setFeedbackVisible] = useState(false);
+  const [feedbackType, setFeedbackType] = useState("success");
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+
+  // Matching system states
+  const [matchesModalVisible, setMatchesModalVisible] = useState(false);
+  const [potentialMatches, setPotentialMatches] = useState([]);
+  const [matchingLoading, setMatchingLoading] = useState(false);
+  const [submittedReportId, setSubmittedReportId] = useState(null);
+
+  // AI Image Analysis states
+  const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
+  const [aiAnalysisResult, setAiAnalysisResult] = useState(null);
+  const [showAIOptions, setShowAIOptions] = useState(false);
+  const [aiValidationResult, setAiValidationResult] = useState(null);
+
   const slideAnim = useRef(new Animated.Value(50)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
 
-  const authInstance = auth;
-
   const [form, setForm] = useState({
-    // Photo
     photos: [],
-
-    // Pet Information
     petName: "",
     species: "",
     breed: "",
     sex: "",
     color: "",
     distinguishingMarks: "",
-
-    // Location & Time
     dateTime: new Date().toISOString(),
-    location: "", // This will now store the address string
-    locationData: {
-      // New field for complete location data
-      address: "",
-      coordinates: null,
-    },
+    location: "",
+    locationData: { address: "", coordinates: null },
     additionalNotes: "",
-
-    // Reporter Information
     reporterName: "",
     email: "",
     phone: "",
   });
 
+  // Validation helper functions
+  const validatePhotos = (photos) => {
+    if (!photos || photos.length === 0) {
+      return "At least one photo is required";
+    }
+
+    if (photos.length > 4) {
+      return "Maximum 4 photos allowed";
+    }
+
+    // Check if any photo is invalid (optional - could add file type/size validation)
+    return null;
+  };
+
+  const validateRequiredField = (value, fieldName) => {
+    if (!value || value.trim() === "") {
+      return `${fieldName} is required`;
+    }
+    return null;
+  };
+
+  const validatePhoneNumber = (phone) => {
+    if (!phone) return "Phone number is required";
+
+    const trimmedPhone = phone.trim();
+    const digitsOnly = trimmedPhone.replace(/[\s\-\(\)]/g, "");
+
+    if (digitsOnly.length < 10) {
+      return "Phone number must be at least 10 digits";
+    }
+
+    if (digitsOnly.length > 15) {
+      return "Phone number must not exceed 15 digits";
+    }
+
+    if (!/^\+?[\d\s\-\(\)]+$/.test(trimmedPhone)) {
+      return "Phone number contains invalid characters";
+    }
+
+    return null;
+  };
+
+  const validateEmail = (email) => {
+    if (!email) return "Email is required";
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return "Please enter a valid email address";
+    }
+
+    return null;
+  };
+
+  const validateLocation = (locationData) => {
+    if (!locationData || !locationData.coordinates) {
+      return "Please select a location on the map";
+    }
+
+    if (!locationData.address || locationData.address.trim() === "") {
+      return "Please enter location details";
+    }
+
+    return null;
+  };
+
+  const validateDateTime = (dateTime) => {
+    if (!dateTime) return "Date and time are required";
+
+    const selectedDate = new Date(dateTime);
+    const now = new Date();
+
+    if (selectedDate > now) {
+      return "Date and time cannot be in the future";
+    }
+
+    // Allow reports up to 30 days in the past (adjustable)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    if (selectedDate < thirtyDaysAgo) {
+      return "Date cannot be more than 30 days in the past";
+    }
+
+    return null;
+  };
+
+  const validateCurrentStep = () => {
+    const errors = {};
+
+    switch (currentStep) {
+      case 1: // PHOTOS
+        const photoError = validatePhotos(form.photos);
+        if (photoError) errors.photos = photoError;
+        break;
+
+      case 2: // PET DETAILS
+        // Species is required for both lost and found
+        if (!form.species) {
+          errors.species = "Please select the species (Dog/Cat)";
+        }
+
+        // Sex is required for both lost and found
+        if (!form.sex) {
+          errors.sex = "Please select the sex";
+        }
+
+        // Pet Name is required ONLY for 'Lost' reports
+        if (reportType === "lost") {
+          const nameError = validateRequiredField(form.petName, "Pet Name");
+          if (nameError) errors.petName = nameError;
+        }
+        break;
+
+      case 3: // LOCATION & CONTACT
+        // Location and dateTime are required for BOTH lost and found
+        const locationError = validateLocation(form.locationData);
+        if (locationError) errors.location = locationError;
+
+        const dateTimeError = validateDateTime(form.dateTime);
+        if (dateTimeError) errors.dateTime = dateTimeError;
+
+        // Contact info is required ONLY for lost reports
+        if (reportType === "lost") {
+          const nameError = validateRequiredField(
+            form.reporterName,
+            "Your name"
+          );
+          if (nameError) errors.reporterName = nameError;
+
+          const emailError = validateEmail(form.email);
+          if (emailError) errors.email = emailError;
+
+          const phoneError = validatePhoneNumber(form.phone);
+          if (phoneError) errors.phone = phoneError;
+        }
+        break;
+    }
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const showFeedback = (type, message) => {
+    setFeedbackType(type);
+    setFeedbackMessage(message);
+    setFeedbackVisible(true);
+  };
+
+  // AI Image Analysis function
+  const analyzeImageWithAI = async (imageUri, isMainPhoto = false) => {
+    try {
+      setIsAnalyzingImage(true);
+
+      // Upload image to get URL for analysis
+      const imageUrl = await CloudinaryService.uploadFile(imageUri, "image");
+
+      // Analyze the image using the same service as pet registration
+      const analysis = await PetImageAnalysisService.analyzePetImage(imageUrl);
+      console.log("AI Analysis Result:", analysis);
+
+      // Check if the image is actually a pet (dog or cat)
+      if (
+        analysis.species &&
+        (analysis.species === "Dog" || analysis.species === "Cat")
+      ) {
+        setAiValidationResult({
+          isValid: true,
+          species: analysis.species,
+          breed: analysis.breed,
+          confidence: analysis.confidence?.species || "medium",
+          message: `Great! This appears to be a ${analysis.species}${
+            analysis.breed && analysis.breed !== "Unknown"
+              ? ` (likely ${analysis.breed})`
+              : ""
+          }`,
+        });
+
+        // If this is the main photo and we have valid species, auto-fill species field
+        if (isMainPhoto && analysis.species && !form.species) {
+          setForm((prev) => ({ ...prev, species: analysis.species }));
+        }
+
+        // Show success feedback
+        showFeedback("success", "Valid pet image detected!");
+
+        return {
+          isValid: true,
+          species: analysis.species,
+          analysis: analysis,
+        };
+      } else {
+        // Not a valid pet image
+        setAiValidationResult({
+          isValid: false,
+          species: analysis.species || "Unknown",
+          message:
+            "This doesn't appear to be a dog or cat. Please upload a clear photo of a pet.",
+        });
+
+        showFeedback("error", "Please upload a clear photo of a dog or cat.");
+        return {
+          isValid: false,
+          species: analysis.species,
+          message: "Not a valid pet image",
+        };
+      }
+    } catch (error) {
+      console.error("AI Analysis error:", error);
+      showFeedback(
+        "error",
+        "AI validation failed. Please ensure it's a clear pet photo."
+      );
+      return {
+        isValid: false,
+        error: error.message,
+      };
+    } finally {
+      setIsAnalyzingImage(false);
+    }
+  };
+
   useEffect(() => {
     loadUserPets();
-    slideAnim.setValue(50);
-    opacityAnim.setValue(0);
-
+    checkForDraft();
     Animated.parallel([
       Animated.timing(slideAnim, {
         toValue: 0,
@@ -89,12 +330,56 @@ export default function ReportScreen({ route }) {
     ]).start();
   }, []);
 
+  useEffect(() => {
+    loadUserPets();
+    checkForDraft();
+    // Animation logic
+    Animated.parallel([
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 600,
+        useNativeDriver: true,
+        delay: 100,
+      }),
+      Animated.timing(opacityAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+        delay: 100,
+      }),
+    ]).start();
+  }, []);
+
+  // Add useEffect for back button handling
+  useEffect(() => {
+    const backAction = () => {
+      if (modalVisible && (form.photos.length > 0 || form.species)) {
+        handleCancel();
+        return true;
+      }
+      return false;
+    };
+
+    const backHandler = BackHandler.addEventListener(
+      "hardwareBackPress",
+      backAction
+    );
+
+    return () => backHandler.remove();
+  }, [modalVisible, form]);
+
+  const checkForDraft = async () => {
+    const draftExists = await DraftService.hasReportDraft();
+    setHasDraft(draftExists);
+  };
+
   const loadUserPets = async () => {
     try {
       const pets = await PetService.getMyPets();
       setMyPets(pets);
     } catch (error) {
-      console.error("[v0] Error loading user pets:", error);
+      console.error("Error loading user pets:", error);
+      showFeedback("error", "Failed to load your pets");
     }
   };
 
@@ -111,7 +396,15 @@ export default function ReportScreen({ route }) {
 
   const openModal = async (type, prefillData = null) => {
     try {
-      const user = authInstance.currentUser;
+      // Check for existing draft first
+      const existingDraft = await DraftService.getReportDraft();
+
+      if (existingDraft && existingDraft.reportType === type) {
+        setShowDraftPrompt(true);
+        return;
+      }
+
+      const user = auth.currentUser;
       if (!user) throw new Error("User not logged in");
 
       const profileRes = await AuthService.getUserProfile();
@@ -128,16 +421,13 @@ export default function ReportScreen({ route }) {
 
       setReportType(type);
       setSelectedPetId(prefillData?.id || null);
+      setFieldErrors({}); // Clear any previous errors
 
       if (prefillData && type === "lost") {
         setIsPreFilled(true);
-        const photosArray = [];
-        if (prefillData.photoUrl) {
-          photosArray.push(prefillData.photoUrl);
-        } else if (prefillData.photos && Array.isArray(prefillData.photos)) {
-          photosArray.push(...prefillData.photos);
-        }
-
+        const photosArray = prefillData.photoUrl
+          ? [prefillData.photoUrl]
+          : prefillData.photos || [];
         setForm((prev) => ({
           ...prev,
           petName: prefillData.name || "",
@@ -148,7 +438,7 @@ export default function ReportScreen({ route }) {
           distinguishingMarks: prefillData.distinguishingMarks || "",
           photos: photosArray,
           reporterName,
-          email: user.email || "",
+          email: user.email,
           phone,
         }));
       } else {
@@ -156,55 +446,344 @@ export default function ReportScreen({ route }) {
         setForm((prev) => ({
           ...prev,
           reporterName,
-          email: user.email || "",
+          email: user.email,
           phone,
         }));
       }
-
       setModalVisible(true);
       setCurrentStep(1);
     } catch (error) {
       console.error("Error opening modal:", error);
-      Alert.alert("Error", "Unable to fetch user info. Please try again.");
+      showFeedback("error", "Unable to open report form");
     }
   };
 
+  const handleCancel = async () => {
+    setModalVisible(false);
+    resetForm();
+    return Promise.resolve(true);
+  };
+
+  const resetForm = () => {
+    setForm({
+      photos: [],
+      petName: "",
+      species: "",
+      breed: "",
+      sex: "",
+      color: "",
+      distinguishingMarks: "",
+      dateTime: new Date().toISOString(),
+      location: "",
+      locationData: { address: "", coordinates: null },
+      additionalNotes: "",
+      reporterName: "",
+      email: "",
+      phone: "",
+    });
+    setCurrentStep(1);
+    setIsPreFilled(false);
+    setSelectedPetId(null);
+    setFieldErrors({}); // Clear errors
+    setIsSubmitting(false);
+  };
+
   const handleChange = (key, value) => {
-    console.log(`[v0] Changing ${key}:`, value, "Type:", typeof value);
+    // Clear error for this field when user starts typing
+    if (fieldErrors[key]) {
+      setFieldErrors((prev) => {
+        const newErrors = { ...prev };
+        delete newErrors[key];
+        return newErrors;
+      });
+    }
+
     if (key === "species") {
       setForm({ ...form, species: value, breed: "" });
     } else if (key === "locationData") {
-      // Handle location data from LocationPicker
       setForm({
         ...form,
-        location: value.address, // Keep string address for display
-        locationData: value, // Store complete location data
+        location: value.address,
+        locationData: value,
       });
+      // Clear location error if location is selected
+      if (fieldErrors.location) {
+        setFieldErrors((prev) => {
+          const newErrors = { ...prev };
+          delete newErrors.location;
+          return newErrors;
+        });
+      }
     } else {
       setForm({ ...form, [key]: value });
     }
+  };
+
+  const AIVisualIndicator = () => {
+    if (!aiValidationResult || form.photos.length === 0) return null;
+
+    return (
+      <View
+        style={tw`mt-3 p-3 rounded-xl ${
+          aiValidationResult.isValid
+            ? "bg-green-50 border border-green-200"
+            : "bg-red-50 border border-red-200"
+        }`}
+      >
+        <View style={tw`flex-row items-center`}>
+          <Ionicons
+            name={
+              aiValidationResult.isValid ? "checkmark-circle" : "alert-circle"
+            }
+            size={16}
+            color={aiValidationResult.isValid ? "#10b981" : "#ef4444"}
+          />
+          <CustomText
+            style={tw`ml-2 text-xs pr-2 ${
+              aiValidationResult.isValid ? "text-green-700" : "text-red-700"
+            }`}
+          >
+            {aiValidationResult.message}
+          </CustomText>
+        </View>
+
+        {aiValidationResult.isValid && aiValidationResult.confidence && (
+          <View style={tw`mt-2 flex-row items-center`}>
+            <Ionicons
+              name={
+                aiValidationResult.confidence === "high"
+                  ? "shield-checkmark"
+                  : aiValidationResult.confidence === "medium"
+                  ? "information-circle"
+                  : "warning"
+              }
+              size={16}
+              color={
+                aiValidationResult.confidence === "high"
+                  ? "#10b981"
+                  : aiValidationResult.confidence === "medium"
+                  ? "#f59e0b"
+                  : "#ef4444"
+              }
+            />
+            <CustomText style={tw`ml-2 text-xs text-gray-600`}>
+              Confidence: {aiValidationResult.confidence}
+            </CustomText>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const AISuggestionsModal = () => {
+    if (!showAIOptions || !aiAnalysisResult) return null;
+
+    return (
+      <Modal transparent visible={showAIOptions} animationType="fade">
+        <View style={tw`flex-1 bg-black/50 justify-center items-center p-6`}>
+          <View style={tw`bg-white rounded-2xl p-6 w-full max-w-sm`}>
+            <View style={tw`flex-row items-center mb-4`}>
+              <Ionicons name="sparkles" size={24} color="#F59549" />
+              <CustomText weight="Bold" style={tw`text-lg ml-2`}>
+                AI Suggestions
+              </CustomText>
+            </View>
+
+            <View style={tw`mb-6`}>
+              <CustomText style={tw`text-gray-600 text-sm mb-3`}>
+                Based on image analysis, we detected:
+              </CustomText>
+
+              {aiAnalysisResult.species &&
+                aiAnalysisResult.species !== "Unknown" && (
+                  <View style={tw`flex-row items-center mb-2`}>
+                    <Ionicons
+                      name={
+                        aiAnalysisResult.confidence?.species === "high"
+                          ? "checkmark-circle"
+                          : "information-circle"
+                      }
+                      size={16}
+                      color={
+                        aiAnalysisResult.confidence?.species === "high"
+                          ? "#10b981"
+                          : "#f59e0b"
+                      }
+                    />
+                    <CustomText style={tw`ml-2 text-sm`}>
+                      Species: {aiAnalysisResult.species}
+                      {aiAnalysisResult.confidence?.species && (
+                        <CustomText style={tw`text-xs text-gray-500`}>
+                          {" "}
+                          ({aiAnalysisResult.confidence.species} confidence)
+                        </CustomText>
+                      )}
+                    </CustomText>
+                  </View>
+                )}
+
+              {aiAnalysisResult.breed &&
+                aiAnalysisResult.breed !== "Unknown" && (
+                  <View style={tw`flex-row items-center mb-2`}>
+                    <Ionicons
+                      name={
+                        aiAnalysisResult.confidence?.breed === "high"
+                          ? "checkmark-circle"
+                          : "information-circle"
+                      }
+                      size={16}
+                      color={
+                        aiAnalysisResult.confidence?.breed === "high"
+                          ? "#10b981"
+                          : "#f59e0b"
+                      }
+                    />
+                    <CustomText style={tw`ml-2 text-sm`}>
+                      Breed: {aiAnalysisResult.breed}
+                      {aiAnalysisResult.confidence?.breed && (
+                        <CustomText style={tw`text-xs text-gray-500`}>
+                          {" "}
+                          ({aiAnalysisResult.confidence.breed} confidence)
+                        </CustomText>
+                      )}
+                    </CustomText>
+                  </View>
+                )}
+
+              {aiAnalysisResult.sex && aiAnalysisResult.sex !== "Unknown" && (
+                <View style={tw`flex-row items-center mb-2`}>
+                  <Ionicons
+                    name={
+                      aiAnalysisResult.confidence?.sex === "high"
+                        ? "checkmark-circle"
+                        : "information-circle"
+                    }
+                    size={16}
+                    color={
+                      aiAnalysisResult.confidence?.sex === "high"
+                        ? "#10b981"
+                        : "#f59e0b"
+                    }
+                  />
+                  <CustomText style={tw`ml-2 text-sm`}>
+                    Sex: {aiAnalysisResult.sex}
+                  </CustomText>
+                </View>
+              )}
+            </View>
+
+            <View style={tw`space-y-3`}>
+              <TouchableOpacity
+                onPress={() => {
+                  // Apply AI suggestions to form
+                  if (aiAnalysisResult.species && !form.species) {
+                    setForm((prev) => ({
+                      ...prev,
+                      species: aiAnalysisResult.species,
+                    }));
+                  }
+                  if (aiAnalysisResult.breed && !form.breed) {
+                    setForm((prev) => ({
+                      ...prev,
+                      breed: aiAnalysisResult.breed,
+                    }));
+                  }
+                  if (aiAnalysisResult.sex && !form.sex) {
+                    setForm((prev) => ({ ...prev, sex: aiAnalysisResult.sex }));
+                  }
+                  setShowAIOptions(false);
+                }}
+                style={tw`bg-orange-500 py-4 rounded-xl active:bg-orange-600`}
+              >
+                <CustomText
+                  weight="SemiBold"
+                  style={tw`text-white text-center`}
+                >
+                  Apply AI Suggestions
+                </CustomText>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  setShowAIOptions(false);
+                  setAiAnalysisResult(null);
+                }}
+                style={tw`border border-gray-300 py-4 rounded-xl active:bg-gray-50`}
+              >
+                <CustomText
+                  weight="SemiBold"
+                  style={tw`text-gray-700 text-center`}
+                >
+                  Fill Manually
+                </CustomText>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
   };
 
   const handlePickImage = async (isMainPhoto = false) => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.7,
+      allowsEditing: true,
     });
 
     if (!result.canceled) {
-      setLoading(true);
-      const photoUri = result.assets[0].uri;
+      const asset = result.assets[0];
 
-      if (isMainPhoto) {
-        const updatedPhotos = [photoUri, ...form.photos.slice(1)];
-        setForm({ ...form, photos: updatedPhotos });
-      } else {
-        if (form.photos.length < 4) {
-          setForm({ ...form, photos: [...form.photos, photoUri] });
-        } else {
-          Alert.alert("Photo Limit", "You can upload up to 4 photos maximum.");
-        }
+      // File size validation (5MB max)
+      if (asset.fileSize && asset.fileSize > 5 * 1024 * 1024) {
+        showFeedback("error", "Please select an image smaller than 5MB");
+        return;
       }
+
+      // File type validation
+      const validExtensions = [".jpg", ".jpeg", ".png", ".webp"];
+      const uri = asset.uri.toLowerCase();
+      const hasValidExtension = validExtensions.some((ext) =>
+        uri.endsWith(ext)
+      );
+
+      if (!hasValidExtension) {
+        showFeedback("error", "Please select a JPEG, PNG, or WebP image");
+        return;
+      }
+
+      setLoading(true);
+      const photoUri = asset.uri;
+
+      // Perform AI validation
+      const validationResult = await analyzeImageWithAI(photoUri, isMainPhoto);
+
+      if (validationResult.isValid) {
+        // Only add the photo if AI validation passes
+        if (isMainPhoto) {
+          const updatedPhotos = [photoUri, ...form.photos.slice(1)];
+          setForm({ ...form, photos: updatedPhotos });
+        } else {
+          if (form.photos.length < 4) {
+            setForm({ ...form, photos: [...form.photos, photoUri] });
+          } else {
+            showFeedback("error", "You can upload up to 4 photos maximum");
+          }
+        }
+
+        // Clear photo error if any
+        if (fieldErrors.photos) {
+          setFieldErrors((prev) => {
+            const newErrors = { ...prev };
+            delete newErrors.photos;
+            return newErrors;
+          });
+        }
+      } else {
+        // AI validation failed - don't add the photo
+        showFeedback("error", "Please upload a clear photo of a dog or cat.");
+      }
+
       setLoading(false);
     }
   };
@@ -214,133 +793,56 @@ export default function ReportScreen({ route }) {
     setForm({ ...form, photos: updatedPhotos });
   };
 
-  const handleSubmit = async () => {
-    console.log("[v0] Form state on submit:", {
-      petName: form.petName,
-      species: form.species,
-      photos: form.photos,
-      photosLength: form.photos?.length,
-      dateTime: form.dateTime,
-      dateTimeType: typeof form.dateTime,
-      dateTimeValid: !!form.dateTime,
-      location: form.location,
-      locationData: form.locationData,
-      reporterName: form.reporterName,
-      email: form.email,
-      phone: form.phone,
-    });
+  const handleDraftAction = async (action) => {
+    if (action === "load") {
+      const draft = await DraftService.getReportDraft();
+      if (draft) {
+        // Close draft modal first with animation
+        setShowDraftPrompt(false);
 
-    const isLostReport = reportType === "lost";
-    const isNameValid = isLostReport ? !!form.petName : true;
-    const hasPhotos = Array.isArray(form.photos) && form.photos.length > 0;
+        // Wait a bit for animation to complete
+        await new Promise((resolve) => setTimeout(resolve, 200));
 
-    const hasDateTime = () => {
-      if (!form.dateTime) return false;
-      try {
-        const date = new Date(form.dateTime);
-        return !isNaN(date.getTime());
-      } catch {
-        return false;
+        // Load draft data
+        setForm(draft.formData || {});
+        setCurrentStep(draft.currentStep || 1);
+        setReportType(draft.reportType || "lost");
+        setSelectedPetId(draft.selectedPetId || null);
+        setIsPreFilled(draft.isPreFilled || false);
+        await DraftService.clearReportDraft();
+
+        // Show report modal
+        setModalVisible(true);
       }
-    };
-
-    // Check for location data
-    const hasLocationData =
-      !!form.locationData &&
-      !!form.locationData.address &&
-      !!form.locationData.coordinates;
-
-    console.log("[v0] Validation checks:", {
-      isNameValid,
-      hasSpecies: !!form.species,
-      hasDateTime: hasDateTime(),
-      hasLocationAddress: !!form.location,
-      hasLocationData: hasLocationData,
-      locationData: form.locationData,
-      hasReporterName: !!form.reporterName,
-      hasEmail: !!form.email,
-      hasPhone: !!form.phone,
-      hasPhotos,
-    });
-
-    if (
-      !isNameValid ||
-      !form.species ||
-      !hasDateTime() ||
-      !hasLocationData || // Updated check
-      !form.reporterName ||
-      !form.email ||
-      !form.phone ||
-      !hasPhotos
-    ) {
-      Alert.alert(
-        "Missing Information",
-        `Please fill in all required fields${
-          isLostReport ? " (including Pet Name)" : ""
-        } and upload at least one photo. Also make sure to select a location on the map.`
-      );
-      return;
+    } else if (action === "discard") {
+      await DraftService.clearReportDraft();
+      setShowDraftPrompt(false);
+      // Wait for animation
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      // Open fresh modal for the same report type
+      const draft = await DraftService.getReportDraft();
+      const type = draft?.reportType || "lost";
+      await openFreshModal(type);
     }
+  };
 
+  const openFreshModal = async (type) => {
     try {
-      setLoading(true);
+      const user = auth.currentUser;
+      if (!user) throw new Error("User not logged in");
+      const profileRes = await AuthService.getUserProfile();
+      let reporterName = "";
+      let phone = "";
 
-      const uploadedPhotoUrls = [];
-
-      for (const photo of form.photos) {
-        try {
-          if (photo.startsWith("http")) {
-            uploadedPhotoUrls.push(photo);
-          } else {
-            const uploadedUrl = await CloudinaryService.uploadFile(
-              photo,
-              "image"
-            );
-            uploadedPhotoUrls.push(uploadedUrl);
-          }
-        } catch (error) {
-          console.error("[v0] Error uploading photo:", error);
-          Alert.alert(
-            "Error",
-            "Failed to upload one or more photos. Please try again."
-          );
-          setLoading(false);
-          return;
-        }
+      if (profileRes.success && profileRes.data) {
+        const data = profileRes.data;
+        reporterName =
+          data.fullName ||
+          `${data.firstName || ""} ${data.lastName || ""}`.trim();
+        phone = data.phone || "";
       }
 
-      const reportData = {
-        petName: form.petName,
-        species: form.species,
-        breed: form.breed,
-        sex: form.sex,
-        color: form.color,
-        distinguishingMarks: form.distinguishingMarks,
-        dateTime: form.dateTime,
-        location: form.locationData.address, // Use address from locationData
-        coordinates: form.locationData.coordinates, // Add coordinates
-        additionalNotes: form.additionalNotes,
-        reporterName: form.reporterName,
-        email: form.email,
-        phone: form.phone,
-        reportType: reportType,
-        photos: uploadedPhotoUrls,
-        petId: selectedPetId || null,
-        createdAt: new Date().toISOString(),
-      };
-
-      console.log("[v0] Submitting report with coordinates:", reportData);
-
-      await PetService.addReport(reportData);
-
-      Alert.alert(
-        "Success",
-        `Your ${reportType} pet report has been submitted!`
-      );
-
-      setModalVisible(false);
-      setReportType(null);
-      setCurrentStep(1);
+      setReportType(type);
       setSelectedPetId(null);
       setIsPreFilled(false);
       setForm({
@@ -353,24 +855,347 @@ export default function ReportScreen({ route }) {
         distinguishingMarks: "",
         dateTime: new Date().toISOString(),
         location: "",
-        locationData: {
-          address: "",
-          coordinates: null,
-        },
+        locationData: { address: "", coordinates: null },
         additionalNotes: "",
-        reporterName: "",
-        email: "",
-        phone: "",
+        reporterName,
+        email: user.email,
+        phone,
       });
+      setCurrentStep(1);
+      setModalVisible(true);
     } catch (error) {
-      console.error("[v0] Error submitting report:", error);
+      Alert.alert("Error", "Unable to open fresh report form.");
+    }
+  };
+
+  // Auto-save draft when modal closes or steps change
+  useEffect(() => {
+    const saveCurrentDraft = async () => {
+      if (
+        modalVisible &&
+        (form.photos.length > 0 || form.species || form.location)
+      ) {
+        await DraftService.saveReportDraft({
+          formData: form,
+          currentStep,
+          reportType,
+          selectedPetId,
+          isPreFilled,
+          savedAt: new Date().toISOString(),
+        });
+        setHasDraft(true);
+      }
+    };
+
+    // Save on component unmount or modal close
+    return () => {
+      if (modalVisible) {
+        saveCurrentDraft();
+      }
+    };
+  }, [form, currentStep, reportType, selectedPetId, isPreFilled, modalVisible]);
+
+  // Search logic for matches
+  const searchForMatches = async (reportData, reportId) => {
+    try {
+      setMatchingLoading(true);
+      const matches = await MatchingService.findPotentialMatches(reportData);
+
+      if (matches.length > 0) {
+        const user = auth.currentUser;
+        for (const match of matches) {
+          await MatchingService.saveMatchAlert(user.uid, {
+            lostReportId: reportId,
+            foundReportId: match.id,
+            matchScore: match.matchScore,
+            matchLevel: match.matchLevel,
+            matchDetails: match.matchDetails,
+          });
+        }
+        setPotentialMatches(matches);
+        setSubmittedReportId(reportId);
+        setMatchesModalVisible(true);
+      } else {
+        Alert.alert(
+          "Submitted",
+          "Report submitted! We'll notify you if matches are found."
+        );
+      }
+    } catch (error) {
       Alert.alert(
-        "Error",
-        error.message || "Failed to submit report. Please try again."
+        "Submitted",
+        "Report submitted, but match search failed. We'll keep looking!"
       );
     } finally {
-      setLoading(false);
+      setMatchingLoading(false);
     }
+  };
+
+  const handleSubmit = async () => {
+    // Validate all steps before submission
+    const errors = {};
+
+    // Step 1 validation
+    const photoError = validatePhotos(form.photos);
+    if (photoError) errors.photos = photoError;
+
+    // Additional AI validation for photos
+    if (
+      form.photos.length > 0 &&
+      aiValidationResult &&
+      !aiValidationResult.isValid
+    ) {
+      errors.photos = "Please upload valid pet images (dogs or cats only)";
+    }
+
+    // Step 2 validation
+    if (!isPreFilled) {
+      const speciesError = validateRequiredField(form.species, "Species");
+      if (speciesError) errors.species = speciesError;
+    }
+
+    // Step 3 validation
+    const locationError = validateLocation(form.locationData);
+    if (locationError) errors.location = locationError;
+
+    const dateTimeError = validateDateTime(form.dateTime);
+    if (dateTimeError) errors.dateTime = dateTimeError;
+
+    const nameError = validateRequiredField(form.reporterName, "Your name");
+    if (nameError) errors.reporterName = nameError;
+
+    const emailError = validateEmail(form.email);
+    if (emailError) errors.email = emailError;
+
+    const phoneError = validatePhoneNumber(form.phone);
+    if (phoneError) errors.phone = phoneError;
+
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      showFeedback("error", "Please fill in all required fields correctly.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setIsSubmitting(true);
+
+      // 1. Upload to Cloudinary
+      const uploadedPhotoUrls = [];
+      for (const photo of form.photos) {
+        const url = await CloudinaryService.uploadFile(photo, "image");
+        uploadedPhotoUrls.push(url);
+      }
+
+      // 2. Generate Embedding from the first uploaded photo
+      let imageVector = null;
+      if (uploadedPhotoUrls.length > 0) {
+        imageVector = await MatchingService.generateImageEmbedding(
+          uploadedPhotoUrls[0]
+        );
+      }
+
+      const reportData = {
+        ...form,
+        location: form.locationData.address,
+        coordinates: form.locationData.coordinates,
+        reportType,
+        photos: uploadedPhotoUrls,
+        imageVector: imageVector,
+        petId: selectedPetId,
+        createdAt: new Date().toISOString(),
+      };
+
+      // 3. Save to Firestore
+      const reportId = await PetService.addReport(reportData);
+      setModalVisible(false);
+
+      // 4. Clear draft after successful submission
+      await DraftService.clearReportDraft();
+      setHasDraft(false);
+
+      // 5. Trigger Matching Search
+      if (reportType === "lost") {
+        await searchForMatches(reportData, reportId);
+      } else {
+        showFeedback("success", "Report submitted successfully!");
+      }
+
+      // Reset form and AI validation
+      resetForm();
+      setAiValidationResult(null);
+      setAiAnalysisResult(null);
+    } catch (error) {
+      console.error("Submission error:", error);
+      showFeedback("error", "Failed to submit report. Please try again.");
+    } finally {
+      setLoading(false);
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleViewMatch = (match) => {
+    setMatchesModalVisible(false);
+    // Navigate to the report detail screen
+    navigation.navigate("ReportDetail", { reportId: match.id });
+  };
+
+  const handleDismissMatch = async (matchId) => {
+    try {
+      await MatchingService.dismissMatch(matchId);
+      setPotentialMatches((prev) => prev.filter((m) => m.id !== matchId));
+    } catch (error) {
+      console.error("Error dismissing match:", error);
+    }
+  };
+
+  // Draft Prompt Modal Component
+  const DraftPromptModal = () => {
+    const scaleAnim = useRef(new Animated.Value(0)).current;
+    const opacityAnim = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+      if (showDraftPrompt) {
+        // Reset scale and opacity before starting
+        scaleAnim.setValue(0);
+        opacityAnim.setValue(0);
+
+        Animated.parallel([
+          Animated.spring(scaleAnim, {
+            toValue: 1,
+            friction: 5,
+            tension: 150,
+            useNativeDriver: true,
+          }),
+          Animated.timing(opacityAnim, {
+            toValue: 1,
+            duration: 200,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      } else {
+        Animated.parallel([
+          Animated.timing(scaleAnim, {
+            toValue: 0,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+          Animated.timing(opacityAnim, {
+            toValue: 0,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }
+    }, [showDraftPrompt]);
+
+    // Check if the draft is from a pre-filled pet
+    const [draftData, setDraftData] = useState(null);
+
+    useEffect(() => {
+      const checkDraft = async () => {
+        const draft = await DraftService.getReportDraft();
+        setDraftData(draft);
+      };
+      if (showDraftPrompt) {
+        checkDraft();
+      }
+    }, [showDraftPrompt]);
+
+    const isPetDraft = draftData?.isPreFilled;
+    const title = "Continue Report?";
+    const message = isPetDraft
+      ? "You have an unsaved report for your registered pet. Would you like to continue where you left off?"
+      : "You have an unsaved pet report draft. Would you like to continue where you left off?";
+    const continueButtonText = "Continue Draft";
+    const dismissButtonText = isPetDraft ? "Start New Report" : "Start Fresh";
+
+    return (
+      <Modal transparent visible={showDraftPrompt} animationType="none">
+        <View style={tw`flex-1 bg-black/50 justify-center items-center p-6`}>
+          <Animated.View
+            style={[
+              tw`bg-white rounded-2xl p-6 w-full max-w-sm`,
+              {
+                transform: [{ scale: scaleAnim }],
+                opacity: opacityAnim,
+              },
+            ]}
+          >
+            <Feather
+              name="file-text"
+              size={48}
+              color="#F59549"
+              style={tw`self-center mb-4`}
+            />
+            <CustomText weight="Bold" style={tw`text-lg text-center mb-2`}>
+              {title}
+            </CustomText>
+            <CustomText style={tw`text-gray-600 text-[12px] text-center mb-6`}>
+              {message}
+            </CustomText>
+
+            <View style={tw`space-y-3`}>
+              <TouchableOpacity
+                onPress={() => handleDraftAction("load")}
+                style={tw`bg-orange-500 py-4 rounded-xl active:bg-orange-600 mb-2`}
+              >
+                <CustomText
+                  weight="SemiBold"
+                  style={tw`text-white text-sm text-center`}
+                >
+                  {continueButtonText}
+                </CustomText>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => handleDraftAction("discard")}
+                style={tw`border border-gray-300 py-4 rounded-xl active:bg-gray-50`}
+              >
+                <CustomText
+                  weight="SemiBold"
+                  style={tw`text-gray-700 text-sm text-center`}
+                >
+                  {dismissButtonText}
+                </CustomText>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => setShowDraftPrompt(false)}
+                style={tw`py-4 active:opacity-70`}
+              >
+                <CustomText style={tw`text-gray-500 text-center`}>
+                  Cancel
+                </CustomText>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        </View>
+      </Modal>
+    );
+  };
+
+  // Add the draft indicator section to the renderEmptyState
+  const renderDraftIndicator = () => {
+    if (!hasDraft) return null;
+
+    return (
+      <TouchableOpacity
+        onPress={() => setShowDraftPrompt(true)}
+        style={tw`bg-amber-50 border border-amber-200 rounded-lg p-3 mx-6 mb-4 flex-row items-center`}
+      >
+        <Feather name="clock" size={20} color="#f59e0b" />
+        <View style={tw`ml-3 flex-1`}>
+          <CustomText weight="SemiBold" style={tw`text-amber-800 text-sm`}>
+            Draft Available
+          </CustomText>
+          <CustomText style={tw`text-amber-600 text-xs`}>
+            Continue your unfinished pet report
+          </CustomText>
+        </View>
+        <Feather name="chevron-right" size={20} color="#f59e0b" />
+      </TouchableOpacity>
+    );
   };
 
   const renderEmptyState = () => (
@@ -383,6 +1208,9 @@ export default function ReportScreen({ route }) {
           Help reunite pets with their families
         </CustomText>
       </View>
+
+      {/* Add draft indicator */}
+      {renderDraftIndicator()}
 
       <ScrollView style={tw`flex-1`} contentContainerStyle={tw`flex-grow`}>
         <View style={tw`flex-1 justify-center items-center px-6`}>
@@ -533,19 +1361,59 @@ export default function ReportScreen({ route }) {
         Help others identify the pet with clear photos
       </CustomText>
 
-      <CustomText weight="SemiBold" style={tw`text-sm mb-2`}>
-        Main Photo <CustomText style={tw`text-red-500`}>*</CustomText>
-      </CustomText>
+      <View style={tw`flex-row items-center justify-between mb-1`}>
+        <CustomText weight="SemiBold" style={tw`text-sm`}>
+          Main Photo <CustomText style={tw`text-red-500`}>*</CustomText>
+        </CustomText>
+
+        {form.photos.length > 0 && (
+          <TouchableOpacity
+            onPress={async () => {
+              // Perform AI analysis on existing photo
+              if (form.photos[0]) {
+                try {
+                  setIsAnalyzingImage(true);
+                  const analysis = await analyzeImageWithAI(
+                    form.photos[0],
+                    true
+                  );
+                  if (analysis.analysis) {
+                    setAiAnalysisResult(analysis.analysis);
+                    setShowAIOptions(true);
+                  }
+                } catch (error) {
+                  console.error("Error analyzing existing photo:", error);
+                } finally {
+                  setIsAnalyzingImage(false);
+                }
+              }
+            }}
+            style={tw`flex-row items-center bg-blue-50 px-3 py-1 rounded-full`}
+          >
+            {isAnalyzingImage ? (
+              <ActivityIndicator size="small" color="#3b82f6" />
+            ) : (
+              <>
+                <Ionicons name="sparkles" size={14} color="#3b82f6" />
+                <CustomText style={tw`text-blue-600 text-xs ml-1`}>
+                  AI Analyze
+                </CustomText>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
+      </View>
+
       <CustomText style={tw`text-xs text-gray-600 mb-3`}>
-        Upload a clear photo of the pet for identification
+        Upload a clear photo of a dog or cat for identification
       </CustomText>
 
       <TouchableOpacity
         onPress={() => handlePickImage(true)}
-        disabled={loading}
-        style={tw`w-full rounded-3xl items-center justify-center mb-6 ${
+        disabled={loading || isAnalyzingImage}
+        style={tw`w-full rounded-3xl items-center justify-center mb-2 ${
           form.photos.length > 0 ? "bg-white" : "border-2 border-orange-400"
-        }`}
+        } ${loading || isAnalyzingImage ? "opacity-50" : ""}`}
       >
         {form.photos.length > 0 ? (
           <View style={tw`w-full relative`}>
@@ -560,24 +1428,54 @@ export default function ReportScreen({ route }) {
             >
               <Ionicons name="close" size={20} color="white" />
             </TouchableOpacity>
+            {isAnalyzingImage && (
+              <View
+                style={tw`absolute inset-0 bg-black/50 rounded-2xl items-center justify-center`}
+              >
+                <ActivityIndicator size="large" color="#fff" />
+                <CustomText style={tw`text-white mt-2 text-xs`}>
+                  AI Validating...
+                </CustomText>
+              </View>
+            )}
           </View>
         ) : (
           <>
-            <Ionicons
-              name="camera"
-              size={48}
-              color="#F59549"
-              style={tw`mb-2 pt-8`}
-            />
-            <CustomText weight="SemiBold" style={tw`text-sm mb-1 ps-8 pe-8`}>
-              Upload pet photo
-            </CustomText>
-            <CustomText style={tw`text-xs text-gray-500 pb-8`}>
-              Tap to select from gallery
-            </CustomText>
+            {isAnalyzingImage ? (
+              <View style={tw`py-20 items-center`}>
+                <ActivityIndicator size="large" color="#F59549" />
+                <CustomText style={tw`mt-4 text-xs text-gray-600`}>
+                  AI Validating Image...
+                </CustomText>
+              </View>
+            ) : (
+              <>
+                <Ionicons
+                  name="camera"
+                  size={48}
+                  color="#F59549"
+                  style={tw`mb-2 pt-8`}
+                />
+                <CustomText weight="SemiBold" style={tw`text-sm mb-1`}>
+                  Upload pet photo
+                </CustomText>
+                <CustomText style={tw`text-xs text-gray-500 pb-8`}>
+                  Tap to select from gallery
+                </CustomText>
+              </>
+            )}
           </>
         )}
       </TouchableOpacity>
+
+      {/* Show AI validation result */}
+      <AIVisualIndicator />
+
+      {fieldErrors.photos && (
+        <CustomText style={tw`text-red-500 text-xs mt-1 ml-1 mb-4`}>
+          {fieldErrors.photos}
+        </CustomText>
+      )}
 
       <CustomText weight="SemiBold" style={tw`text-sm mb-2`}>
         Additional Photos{" "}
@@ -586,7 +1484,7 @@ export default function ReportScreen({ route }) {
         </CustomText>
       </CustomText>
       <CustomText style={tw`text-xs text-gray-600 mb-3`}>
-        Add up to 3 more photos to show different angles or distinguishing marks
+        Add up to 3 more photos to show different angles
       </CustomText>
 
       <View style={tw`flex-row flex-wrap gap-2 mb-4`}>
@@ -609,10 +1507,16 @@ export default function ReportScreen({ route }) {
         {form.photos.length < 4 && (
           <TouchableOpacity
             onPress={() => handlePickImage(false)}
-            disabled={loading}
-            style={tw`w-24 h-24 border-2 border-dashed border-orange-300 rounded-2xl items-center justify-center`}
+            disabled={loading || isAnalyzingImage}
+            style={tw`w-24 h-24 border-2 border-dashed border-orange-300 rounded-2xl items-center justify-center ${
+              loading || isAnalyzingImage ? "opacity-50" : ""
+            }`}
           >
-            <Ionicons name="add" size={32} color="#F59549" />
+            {isAnalyzingImage ? (
+              <ActivityIndicator size="small" color="#F59549" />
+            ) : (
+              <Ionicons name="add" size={32} color="#F59549" />
+            )}
           </TouchableOpacity>
         )}
       </View>
@@ -630,21 +1534,44 @@ export default function ReportScreen({ route }) {
           : "Describe the found pet"}
       </CustomText>
 
-      <CustomInput
-        label={reportType === "lost" ? "Pet Name *" : "Pet Name (If known)"}
-        placeholder={
-          reportType === "lost"
-            ? "What is their name?"
-            : "e.g. 'Buddy' (from tag) or leave blank"
-        }
-        value={form.petName}
-        onChangeText={(text) => handleChange("petName", text)}
-      />
+      {/* PET NAME INPUT */}
+      {/* Check if it's required based on report type */}
+      {reportType === "lost" ? (
+        <>
+          <CustomInput
+            label={
+              <CustomText weight="SemiBold" style={tw`mt-3 mb-2`}>
+                Pet Name <CustomText style={tw`text-red-500`}>*</CustomText>
+              </CustomText>
+            }
+            placeholder={
+              reportType === "lost"
+                ? "What is their name?"
+                : "e.g. 'Buddy' (from tag) or leave blank"
+            }
+            value={form.petName}
+            onChangeText={(text) => handleChange("petName", text)}
+          />
+          {fieldErrors.petName && (
+            <CustomText style={tw`text-red-500 text-xs mt-1 ml-1 mb-4`}>
+              {fieldErrors.petName}
+            </CustomText>
+          )}
+        </>
+      ) : (
+        <CustomInput
+          label="Pet Name (Optional)"
+          placeholder="e.g. 'Buddy' (from tag) or leave blank"
+          value={form.petName}
+          onChangeText={(text) => handleChange("petName", text)}
+        />
+      )}
 
+      {/* SPECIES SELECTOR */}
       <CustomText weight="SemiBold" style={tw`mt-3 mb-2`}>
-        Species *
+        Species <CustomText style={tw`text-red-500`}>*</CustomText>
       </CustomText>
-      <View style={tw`flex-row bg-gray-100 rounded-xl p-1 mb-4`}>
+      <View style={tw`flex-row bg-gray-100 rounded-xl p-1 mb-2`}>
         {["Dog", "Cat"].map((item) => {
           const selected = form.species === item;
           return (
@@ -667,20 +1594,29 @@ export default function ReportScreen({ route }) {
           );
         })}
       </View>
+      {/* Species Error Message */}
+      {fieldErrors.species && (
+        <CustomText style={tw`text-red-500 text-xs mt-1 ml-1 mb-4`}>
+          {fieldErrors.species}
+        </CustomText>
+      )}
 
+      {/* BREED INPUT (Optional) */}
       {form.species && (
         <CustomInput
           label="Breed (Optional)"
           placeholder={`${form.species} breed`}
           value={form.breed}
           onChangeText={(text) => handleChange("breed", text)}
+          error={fieldErrors.breed}
         />
       )}
 
+      {/* SEX SELECTOR */}
       <CustomText weight="SemiBold" style={tw`mt-4 mb-2`}>
-        Sex
+        Sex <CustomText style={tw`text-red-500`}>*</CustomText>
       </CustomText>
-      <View style={tw`flex-row bg-gray-100 rounded-xl p-1 mb-4`}>
+      <View style={tw`flex-row bg-gray-100 rounded-xl p-1 mb-2`}>
         {["Male", "Female", "Unknown"].map((item) => {
           const selected = form.sex === item;
           return (
@@ -703,14 +1639,23 @@ export default function ReportScreen({ route }) {
           );
         })}
       </View>
+      {/* Sex Error Message */}
+      {fieldErrors.sex && (
+        <CustomText style={tw`text-red-500 text-xs mt-1 ml-1 mb-4`}>
+          {fieldErrors.sex}
+        </CustomText>
+      )}
 
+      {/* COLOR INPUT (Optional) */}
       <CustomInput
         label="Color & Markings (Optional)"
         placeholder="e.g., Brown with white spot on chest"
         value={form.color}
         onChangeText={(text) => handleChange("color", text)}
+        error={fieldErrors.color}
       />
 
+      {/* DISTINGUISHING MARKS (Optional) */}
       <CustomInput
         label="Distinguishing Features (Optional)"
         placeholder={
@@ -720,6 +1665,9 @@ export default function ReportScreen({ route }) {
         }
         value={form.distinguishingMarks}
         onChangeText={(text) => handleChange("distinguishingMarks", text)}
+        multiline
+        numberOfLines={3}
+        error={fieldErrors.distinguishingMarks}
       />
     </View>
   );
@@ -735,26 +1683,50 @@ export default function ReportScreen({ route }) {
           : "When and where did you find the pet?"}
       </CustomText>
 
-      <DateTimeSelector
-        label={reportType === "lost" ? "Date & Time Lost" : "Date & Time Found"}
-        value={form.dateTime}
-        onChange={(dateTime) => {
-          console.log("[v0] DateTime changed to:", dateTime);
-          handleChange("dateTime", dateTime);
-        }}
-      />
+      {/* Date & Time Field */}
+      <View style={tw`mb-4`}>
+        <CustomText weight="SemiBold" style={tw`-mb-6`}>
+          {reportType === "lost" ? "Date & Time Lost" : "Date & Time Found"}
+          <CustomText style={tw`text-red-500`}> *</CustomText>
+        </CustomText>
+        <DateTimeSelector
+          value={form.dateTime}
+          onChange={(dateTime) => {
+            handleChange("dateTime", dateTime);
+          }}
+        />
+        {fieldErrors.dateTime && (
+          <CustomText style={tw`text-red-500 text-xs mt-1 ml-1`}>
+            {fieldErrors.dateTime}
+          </CustomText>
+        )}
+      </View>
 
-      <LocationPicker
-        label={reportType === "lost" ? "Location Last Seen" : "Location Found"}
-        placeholder={
-          reportType === "lost"
-            ? "Where were they last seen?"
-            : "Where did you find them?"
-        }
-        value={form.location} // This now passes the address string for display
-        onChange={(locationData) => handleChange("locationData", locationData)}
-      />
+      {/* Location Field */}
+      <View style={tw`mb-2`}>
+        <CustomText weight="SemiBold" style={tw`-mb-6`}>
+          {reportType === "lost" ? "Location Last Seen" : "Location Found"}
+          <CustomText style={tw`text-red-500`}> *</CustomText>
+        </CustomText>
+        <LocationPicker
+          placeholder={
+            reportType === "lost"
+              ? "Where were they last seen?"
+              : "Where did you find them?"
+          }
+          value={form.location}
+          onChange={(locationData) =>
+            handleChange("locationData", locationData)
+          }
+        />
+        {fieldErrors.location && (
+          <CustomText style={tw`text-red-500 text-xs ml-1`}>
+            {fieldErrors.location}
+          </CustomText>
+        )}
+      </View>
 
+      {/* Additional Notes - Already Optional */}
       <CustomInput
         label="Additional Notes (Optional)"
         placeholder="Any other information that might help?"
@@ -762,6 +1734,7 @@ export default function ReportScreen({ route }) {
         numberOfLines={4}
         value={form.additionalNotes}
         onChangeText={(text) => handleChange("additionalNotes", text)}
+        error={fieldErrors.additionalNotes}
       />
 
       <View style={tw`mt-8 pt-6 border-t border-gray-200`}>
@@ -782,46 +1755,50 @@ export default function ReportScreen({ route }) {
 
         <View style={tw`bg-gray-50 rounded-2xl p-4 border border-gray-200`}>
           <View style={tw`mb-4`}>
-            <CustomText style={tw`text-xs text-gray-500 mb-1`}>Name</CustomText>
+            <CustomText style={tw`text-xs text-gray-500 mb-1`}>
+              Name *
+            </CustomText>
             <CustomText weight="SemiBold" style={tw`text-gray-900`}>
               {form.reporterName || "Not provided"}
             </CustomText>
+            {fieldErrors.reporterName && (
+              <CustomText style={tw`text-red-500 text-xs mt-1`}>
+                {fieldErrors.reporterName}
+              </CustomText>
+            )}
           </View>
 
           <View style={tw`mb-4`}>
             <CustomText style={tw`text-xs text-gray-500 mb-1`}>
-              Email
+              Email *
             </CustomText>
             <CustomText weight="SemiBold" style={tw`text-gray-900`}>
               {form.email || "Not provided"}
             </CustomText>
+            {fieldErrors.email && (
+              <CustomText style={tw`text-red-500 text-xs mt-1`}>
+                {fieldErrors.email}
+              </CustomText>
+            )}
           </View>
 
           <View>
             <CustomText style={tw`text-xs text-gray-500 mb-1`}>
-              Phone
+              Phone *
             </CustomText>
             <CustomText weight="SemiBold" style={tw`text-gray-900`}>
               {form.phone || "Not provided"}
             </CustomText>
+            {fieldErrors.phone && (
+              <CustomText style={tw`text-red-500 text-xs mt-1`}>
+                {fieldErrors.phone}
+              </CustomText>
+            )}
           </View>
         </View>
       </View>
     </View>
   );
-
-  const renderStepContent = () => {
-    switch (currentStep) {
-      case 1:
-        return renderStep1();
-      case 2:
-        return renderStep2();
-      case 3:
-        return renderStep3();
-      default:
-        return null;
-    }
-  };
 
   const renderContactEditModal = () => (
     <Modal animationType="slide" transparent={false} visible={contactEditModal}>
@@ -864,25 +1841,54 @@ export default function ReportScreen({ route }) {
             </CustomText>
 
             <CustomInput
-              label="Your Name *"
+              label={
+                <CustomText weight="SemiBold" style={tw`mb-2`}>
+                  Your Name <CustomText style={tw`text-red-500`}>*</CustomText>
+                </CustomText>
+              }
               placeholder="Full name"
               value={form.reporterName}
               onChangeText={(text) => handleChange("reporterName", text)}
             />
+            {fieldErrors.reporterName && (
+              <CustomText style={tw`text-red-500 text-xs mt-1 ml-1 mb-4`}>
+                {fieldErrors.reporterName}
+              </CustomText>
+            )}
 
             <CustomInput
-              label="Email Address *"
+              label={
+                <CustomText weight="SemiBold" style={tw`mb-2`}>
+                  Email Address{" "}
+                  <CustomText style={tw`text-red-500`}>*</CustomText>
+                </CustomText>
+              }
               placeholder="your@email.com"
               value={form.email}
               onChangeText={(text) => handleChange("email", text)}
             />
+            {fieldErrors.email && (
+              <CustomText style={tw`text-red-500 text-xs mt-1 ml-1 mb-4`}>
+                {fieldErrors.email}
+              </CustomText>
+            )}
 
             <CustomInput
-              label="Phone Number *"
+              label={
+                <CustomText weight="SemiBold" style={tw`mb-2`}>
+                  Phone Number{" "}
+                  <CustomText style={tw`text-red-500`}>*</CustomText>
+                </CustomText>
+              }
               placeholder="Your phone number"
               value={form.phone}
               onChangeText={(text) => handleChange("phone", text)}
             />
+            {fieldErrors.phone && (
+              <CustomText style={tw`text-red-500 text-xs mt-1 ml-1 mb-4`}>
+                {fieldErrors.phone}
+              </CustomText>
+            )}
 
             {/* Extra padding for keyboard */}
             <View style={tw`h-40`} />
@@ -903,6 +1909,19 @@ export default function ReportScreen({ route }) {
       </SafeAreaView>
     </Modal>
   );
+
+  const renderStepContent = () => {
+    switch (currentStep) {
+      case 1:
+        return renderStep1();
+      case 2:
+        return renderStep2();
+      case 3:
+        return renderStep3();
+      default:
+        return null;
+    }
+  };
 
   const handlePetSelect = (pet) => {
     if (selectedPetId === pet.id) {
@@ -964,20 +1983,13 @@ export default function ReportScreen({ route }) {
           <KeyboardAvoidingView
             style={tw`flex-1`}
             behavior={Platform.OS === "ios" ? "padding" : undefined}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20} // Add this
+            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
           >
             {/* Header - Fixed */}
             <View
               style={tw`px-6 pt-4 pb-2 border-b border-gray-100 flex-row justify-between items-center`}
             >
-              <TouchableOpacity
-                onPress={() => {
-                  setModalVisible(false);
-                  setReportType(null);
-                  setCurrentStep(1);
-                }}
-                style={tw`p-2`}
-              >
+              <TouchableOpacity onPress={handleCancel} style={tw`p-2`}>
                 <Ionicons name="close-outline" size={28} color="#1F2937" />
               </TouchableOpacity>
               <CustomText weight="Bold" style={tw`text-lg`}>
@@ -991,10 +2003,14 @@ export default function ReportScreen({ route }) {
               style={tw`flex-1`}
               contentContainerStyle={tw`px-6 pt-6`}
               showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled" // Add this
+              keyboardShouldPersistTaps="handled"
             >
               {renderStepIndicator()}
-              {renderStepContent()}
+              {currentStep === 1
+                ? renderStep1()
+                : currentStep === 2
+                ? renderStep2()
+                : renderStep3()}
               {/* Add extra padding at bottom for keyboard */}
               <View style={tw`h-40`} />
             </ScrollView>
@@ -1013,16 +2029,35 @@ export default function ReportScreen({ route }) {
                       </CustomText>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      onPress={() =>
-                        currentStep === 3
-                          ? handleSubmit()
-                          : setCurrentStep((prev) => prev + 1)
-                      }
-                      style={tw`flex-1 bg-orange-500 py-4 rounded-2xl items-center shadow-md shadow-orange-200`}
+                      onPress={() => {
+                        if (currentStep === 3) {
+                          handleSubmit();
+                        } else {
+                          if (validateCurrentStep()) {
+                            setCurrentStep((prev) => prev + 1);
+                          } else {
+                            // Show feedback for specific step errors
+                            let errorMessage =
+                              "Please fill in all required fields correctly.";
+
+                            // Get the first error message to show
+                            const errorKeys = Object.keys(fieldErrors);
+                            if (errorKeys.length > 0) {
+                              errorMessage = fieldErrors[errorKeys[0]];
+                            }
+
+                            showFeedback("error", errorMessage);
+                          }
+                        }
+                      }}
+                      style={tw`flex-1 bg-orange-500 py-4 rounded-2xl items-center shadow-md shadow-orange-200 ${
+                        loading || isSubmitting ? "opacity-50" : ""
+                      }`}
+                      disabled={loading || isSubmitting}
                     >
                       <CustomText weight="Bold" style={tw`text-white`}>
                         {currentStep === 3
-                          ? loading
+                          ? loading || isSubmitting
                             ? "Submitting..."
                             : "Submit Report"
                           : "Continue"}
@@ -1030,9 +2065,27 @@ export default function ReportScreen({ route }) {
                     </TouchableOpacity>
                   </>
                 ) : (
+                  // This is the STEP 1 Continue button
                   <TouchableOpacity
-                    onPress={() => setCurrentStep((prev) => prev + 1)}
-                    style={tw`flex-1 bg-orange-500 py-4 rounded-2xl items-center shadow-md shadow-orange-200`}
+                    onPress={() => {
+                      if (validateCurrentStep()) {
+                        setCurrentStep((prev) => prev + 1);
+                      } else {
+                        // Show feedback for photo error specifically
+                        if (fieldErrors.photos) {
+                          showFeedback("error", fieldErrors.photos);
+                        } else {
+                          showFeedback(
+                            "error",
+                            "Please upload at least one photo"
+                          );
+                        }
+                      }
+                    }}
+                    style={tw`flex-1 bg-orange-500 py-4 rounded-2xl items-center shadow-md shadow-orange-200 ${
+                      loading ? "opacity-50" : ""
+                    }`}
+                    disabled={loading}
                   >
                     <CustomText weight="Bold" style={tw`text-white`}>
                       Continue
@@ -1045,7 +2098,34 @@ export default function ReportScreen({ route }) {
         </SafeAreaView>
       </Modal>
 
+      {/* Add DraftPromptModal */}
+      <DraftPromptModal />
+
+      {/* Add AI Suggestions Modal */}
+      <AISuggestionsModal />
+
+      <FeedbackModal
+        visible={feedbackVisible}
+        type={feedbackType}
+        message={feedbackMessage}
+        onClose={() => setFeedbackVisible(false)}
+      />
+
       {renderContactEditModal()}
+      <PotentialMatchesModal
+        visible={matchesModalVisible}
+        matches={potentialMatches}
+        loading={matchingLoading}
+        onClose={() => setMatchesModalVisible(false)}
+        onViewMatch={(match) => {
+          setMatchesModalVisible(false);
+          navigation.navigate("ReportDetail", { reportId: match.id });
+        }}
+        onDismissMatch={async (id) => {
+          await MatchingService.dismissMatch(id);
+          setPotentialMatches((prev) => prev.filter((m) => m.id !== id));
+        }}
+      />
     </SafeAreaView>
   );
 }

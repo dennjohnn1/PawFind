@@ -449,7 +449,7 @@ export default function PetDetailsModal({
                   name={certificateLoading ? "sync" : "download"}
                   size={16}
                   color="white"
-                  style={tw`mr-2 ${certificateLoading ? "animate-spin" : ""}`}
+                  style={tw`mr-2 ${certificateLoading ? "" : ""}`}
                 />
                 <CustomText weight="SemiBold" style={tw`text-white text-sm`}>
                   {certificateLoading
@@ -497,7 +497,7 @@ export default function PetDetailsModal({
 
           {/* Hero section with pet image and quick info */}
           <View
-            style={tw`px-6 py-4 pb-2 bg-gradient-to-b from-orange-50 to-white border-b border-gray-100`}
+            style={tw`px-6 py-4 pb-2 border-b border-gray-100`}
           >
             <View style={tw`flex-row items-start mb-4`}>
               {pet.photoUrl ? (

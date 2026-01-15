@@ -138,7 +138,7 @@ export default function LocationPicker({
   return (
     <View style={tw`mb-4`}>
       <CustomText weight="SemiBold" style={tw`mb-2 text-gray-700`}>
-        {label} *
+        {label}
       </CustomText>
 
       <TouchableOpacity

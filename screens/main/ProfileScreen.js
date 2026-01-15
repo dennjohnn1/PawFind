@@ -568,7 +568,7 @@ export default function ProfileScreen() {
 
           {/* Footer Info */}
           <View
-            style={tw`bg-gradient-to-r from-orange-50 to-amber-50 rounded-2xl p-5 border border-orange-100 mb-8`}
+            style={tw`rounded-2xl p-5 border border-orange-100 mb-8`}
           >
             <View style={tw`flex-row items-center mb-4`}>
               <View

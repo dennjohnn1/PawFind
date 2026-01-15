@@ -295,7 +295,7 @@ export default function DateTimeSelector({ value, onChange, label }) {
   return (
     <View>
       <CustomText weight="SemiBold" style={tw`mb-2`}>
-        {label} *
+        {label}
       </CustomText>
 
       <View style={tw`bg-gray-50 rounded-xl border border-gray-200 mb-4`}>

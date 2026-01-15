@@ -433,7 +433,7 @@ export default function ReportDetail() {
         <View style={tw`px-5 pt-6`}>
           {/* Pet Name and Info */}
           <View style={tw`mb-6`}>
-            <CustomText weight="Bold" style={tw`text-2xl text-gray-900 mb-1`}>
+            <CustomText weight="Bold" style={tw`text-xl text-gray-900 mb-1`}>
               {report.petName || "Unknown Pet"}
             </CustomText>
             <View style={tw`flex-row items-center`}>
@@ -487,28 +487,28 @@ export default function ReportDetail() {
               {report.species && (
                 <View style={tw`bg-white px-3 py-2 rounded-xl mr-2 mb-2 border border-gray-100`}>
                   <CustomText style={tw`text-[12px] text-gray-700`}>
-                    🐾 {report.species}
+                    {report.species}
                   </CustomText>
                 </View>
               )}
               {report.breed && (
                 <View style={tw`bg-white px-3 py-2 rounded-xl mr-2 mb-2 border border-gray-100`}>
                   <CustomText style={tw`text-[12px] text-gray-700`}>
-                    🐶 {report.breed}
+                    {report.breed}
                   </CustomText>
                 </View>
               )}
               {report.color && (
                 <View style={tw`bg-white px-3 py-2 rounded-xl mr-2 mb-2 border border-gray-100`}>
                   <CustomText style={tw`text-[12px] text-gray-700`}>
-                    🎨 {report.color}
+                    {report.color}
                   </CustomText>
                 </View>
               )}
               {report.sex && (
                 <View style={tw`bg-white px-3 py-2 rounded-xl mr-2 mb-2 border border-gray-100`}>
                   <CustomText style={tw`text-[12px] text-gray-700`}>
-                    {report.sex === "Male" ? "♂ Male" : "♀ Female"}
+                    {report.sex === "Male" ? "Male" : "Female"}
                   </CustomText>
                 </View>
               )}
@@ -629,13 +629,6 @@ export default function ReportDetail() {
               </CustomText>
             </View>
           )}
-
-          {/* Report ID & Date */}
-          <View style={tw`mb-8`}>
-            <CustomText style={tw`text-gray-400 text-xs text-center`}>
-              Report ID: {report.id?.substring(0, 8)} • Created: {formatDateTime(report.createdAt)}
-            </CustomText>
-          </View>
         </View>
       </ScrollView>
 

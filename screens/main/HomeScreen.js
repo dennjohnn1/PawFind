@@ -222,7 +222,7 @@ export default function HomeScreen({ route }) {
       <View style={[style, tw`overflow-hidden bg-gray-100 relative`]}>
         <Animated.View
           style={[
-            tw`absolute top-0 left-0 bottom-0 w-[100px] bg-gradient-to-r from-transparent via-white to-transparent`,
+            tw`absolute top-0 left-0 bottom-0 w-[100px]`,
             {
               transform: [{ translateX: shimmerTranslateX }],
             },
@@ -495,7 +495,7 @@ export default function HomeScreen({ route }) {
       {/* Fixed Header */}
       <View style={tw`bg-white border-b border-gray-200`}>
         {/* Welcome Section */}
-        <View style={tw`px-5 pt-4 pb-3`}>
+        <View style={tw`px-5 pt-3 pb-3`}>
           <View style={tw`flex-row items-center justify-between`}>
             <View>
               <CustomText style={tw`text-gray-500 text-[12px]`}>

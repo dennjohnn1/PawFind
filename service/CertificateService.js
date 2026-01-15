@@ -15,14 +15,16 @@ class CertificateService {
 
   async getAppLogoBase64() {
     try {
-      const asset = Asset.fromModule(require("../assets/images/app_symbol.png"));
+      const asset = Asset.fromModule(
+        require("../assets/images/app_symbol.png")
+      );
       await asset.downloadAsync(); // ensure it's loaded
-      
+
       // Fix: Use the correct encoding constant
       const base64 = await FileSystem.readAsStringAsync(asset.localUri, {
         encoding: "base64", // Changed from FileSystem.EncodingType.Base64
       });
-      
+
       return `data:image/png;base64,${base64}`;
     } catch (error) {
       console.error("Error loading app logo:", error);
@@ -390,51 +392,26 @@ class CertificateService {
           }
           
           .qr-section { 
-            background: #f8f9fa; 
-            border-radius: 10px; 
-            padding: 25px; 
-            border: 2px solid #e9ecef;
-            margin-top: 20px;
-            display: flex;
-            align-items: center;
-            gap: 25px;
+            position: absolute;
+            top: 60px;
+            right: 60px;
+            background: white;
+            border-radius: 8px;
+            padding: 10px;
+            border: 2px solid #F59549;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
           }
           
           .qr-image-container { 
-            flex-shrink: 0;
             display: flex;
             align-items: center;
             justify-content: center;
           }
           
           .qr-image-container img { 
-            width: 160px; 
-            height: 160px; 
-            padding: 10px;
-            background: white;
-            border-radius: 5px;
-            border: 1px solid #ddd;
-          }
-          
-          .qr-text-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-          }
-          
-          .qr-title { 
-            color: #F59549; 
-            font-size: 16px;
-            font-weight: 700;
-            margin-bottom: 10px;
-            font-family: 'Montserrat', sans-serif;
-          }
-          
-          .qr-description { 
-            font-size: 13px; 
-            color: #7f8c8d; 
-            line-height: 1.5;
+            width: 100px; 
+            height: 100px; 
+            display: block;
           }
           
           .footer { 
@@ -501,24 +478,6 @@ class CertificateService {
             text-transform: uppercase;
           }
           
-          .seal {
-            position: absolute;
-            bottom: 40px;
-            right: 40px;
-            width: 80px;
-            height: 80px;
-            background: linear-gradient(135deg, #F59549, #FFB347);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 24px;
-            font-weight: bold;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
-            border: 3px solid white;
-          }
-          
           @media print { 
             body { 
               background: white !important; 
@@ -549,16 +508,24 @@ class CertificateService {
           
           <!-- Watermark -->
           <div class="watermark">PAWFIND</div>
-          
-          <!-- Official seal -->
-          <div class="seal">✓</div>
+
+          <!-- QR Code in top right -->
+          <div class="qr-section">
+            <div class="qr-image-container">
+              <img src="${qrBase64}" alt="QR Code" />
+            </div>
+          </div>
 
           <!-- Header -->
           <div class="header">
             <div class="logo-title-container">
-              ${appLogoBase64 ? `<div class="logo-icon">
+              ${
+                appLogoBase64
+                  ? `<div class="logo-icon">
                 <img src="${appLogoBase64}" alt="App Logo" />
-              </div>` : ''}
+              </div>`
+                  : ""
+              }
               <div class="title-text">
                 <h1 class="certificate-title">PET REGISTRATION CERTIFICATE</h1>
                 <div class="certificate-subtitle">Official Registration Document</div>
@@ -604,7 +571,9 @@ class CertificateService {
                   </div>
                   <div class="info-item">
                     <div class="info-label">Breed</div>
-                    <div class="info-value">${pet.breed || "Not specified"}</div>
+                    <div class="info-value">${
+                      pet.breed || "Not specified"
+                    }</div>
                   </div>
                   <div class="info-item">
                     <div class="info-label">Sex</div>
@@ -616,7 +585,9 @@ class CertificateService {
                   </div>
                   <div class="info-item">
                     <div class="info-label">Color</div>
-                    <div class="info-value">${pet.color || "Not specified"}</div>
+                    <div class="info-value">${
+                      pet.color || "Not specified"
+                    }</div>
                   </div>
                   ${
                     pet.distinguishingMarks
@@ -639,22 +610,32 @@ class CertificateService {
                 <div class="info-grid">
                   <div class="info-item">
                     <div class="info-label">Owner Name</div>
-                    <div class="info-value"><strong>${pet.ownerName || "Not provided"}</strong></div>
+                    <div class="info-value"><strong>${
+                      pet.ownerName || "Not provided"
+                    }</strong></div>
                   </div>
                   <div class="info-item">
                     <div class="info-label">Email Address</div>
-                    <div class="info-value">${pet.ownerEmail || "Not provided"}</div>
+                    <div class="info-value">${
+                      pet.ownerEmail || "Not provided"
+                    }</div>
                   </div>
                   <div class="info-item">
                     <div class="info-label">Phone Number</div>
-                    <div class="info-value">${pet.ownerPhone || "Not provided"}</div>
+                    <div class="info-value">${
+                      pet.ownerPhone || "Not provided"
+                    }</div>
                   </div>
-                  ${pet.ownerAddress ? `
-                    <div class="info-item full-width">
+                  ${
+                    pet.ownerAddress
+                      ? `
+                    <div class="info-item">
                       <div class="info-label">Address</div>
                       <div class="info-value">${pet.ownerAddress}</div>
                     </div>
-                  ` : ""}
+                  `
+                      : `<div class="info-item"></div>`
+                  }
                 </div>
               </div>
 
@@ -685,25 +666,61 @@ class CertificateService {
                         ${validityDate.toLocaleDateString("en-US", {
                           year: "numeric",
                           month: "long",
-                          day: "numeric"
+                          day: "numeric",
                         })}
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <!-- QR Section with QR on left, text on right -->
-                <div class="qr-section">
-                  <div class="qr-image-container">
-                    <img src="${qrBase64}" alt="QR Code" />
-                  </div>
-                  <div class="qr-text-container">
-                    <div class="qr-title">SCAN TO VERIFY</div>
-                    <div class="qr-description">
-                      This certificate's authenticity can be verified by scanning the QR code with any smartphone camera or QR scanner app. Visit our official verification portal to confirm the registration details.
+                <!-- Owner Signature Section -->
+                ${
+                  pet.ownerSignature
+                    ? `
+                <div class="info-section" style="margin-top: 25px;">
+                  <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); 
+                              border-radius: 10px; 
+                              padding: 20px; 
+                              border: 2px solid #f59e0b;
+                              text-align: center;">
+                    <div style="font-size: 12px; 
+                                color: #92400e; 
+                                font-weight: 600; 
+                                text-transform: uppercase; 
+                                letter-spacing: 1px; 
+                                margin-bottom: 15px;">
+                      Owner's Signature
+                    </div>
+                    <div style="background: white; 
+                                padding: 15px; 
+                                border-radius: 8px; 
+                                display: inline-block;
+                                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);">
+                      <img src="${pet.ownerSignature}" 
+                           alt="Owner Signature" 
+                           style="max-width: 250px; 
+                                  height: auto; 
+                                  max-height: 80px;
+                                  display: block;" />
+                    </div>
+                    <div style="font-size: 11px; 
+                                color: #065f46; 
+                                font-weight: 600; 
+                                margin-top: 10px;">
+                      ✓ Digitally signed on ${new Date().toLocaleDateString(
+                        "en-US",
+                        {
+                          year: "numeric",
+                          month: "long",
+                          day: "numeric",
+                        }
+                      )}
                     </div>
                   </div>
                 </div>
+                `
+                    : ""
+                }
               </div>
             </div>
           </div>
@@ -733,9 +750,9 @@ class CertificateService {
 
   async generateAndDownloadCertificate(pet) {
     // Use existing certificate number if available, otherwise generate new one
-    const certificateNumber = pet.certificate?.number || this.generateCertificateNumber(
-      pet.id || `pet_${Date.now()}`
-    );
+    const certificateNumber =
+      pet.certificate?.number ||
+      this.generateCertificateNumber(pet.id || `pet_${Date.now()}`);
     const pdfUri = await this.generateCertificatePDF(pet, certificateNumber);
 
     const safePetName = pet.name.replace(/[^a-z0-9]/gi, "_").toLowerCase();
