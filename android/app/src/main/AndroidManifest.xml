@@ -3,16 +3,11 @@
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
   <uses-permission android:name="android.permission.INTERNET"/>
-  <!-- OPTIONAL PERMISSIONS, REMOVE WHATEVER YOU DO NOT NEED -->
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
-  <!-- These require runtime permissions on M -->
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
-  <!-- END OPTIONAL PERMISSIONS -->
-
   <queries>
-    <!-- Support checking for http(s) links via the Linking API -->
     <intent>
       <action android:name="android.intent.action.VIEW" />
       <category android:name="android.intent.category.BROWSABLE" />
@@ -31,7 +26,7 @@
 
     <meta-data
       android:name="com.google.android.geo.API_KEY"
-      android:value="@string/google_maps_api_key" />
+      android:value="AIzaSyD4_GJDbrg6mXLMMM7jbvsTvZwH-wyYK-M" />
 
     <activity
       android:name=".MainActivity"

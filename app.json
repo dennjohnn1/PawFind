@@ -19,7 +19,7 @@
         "foregroundImage": "./assets/images/pawfind-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.pawfind.app", 
+      "package": "com.pawfind",
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyD4_GJDbrg6mXLMMM7jbvsTvZwH-wyYK-M"

@@ -76,6 +76,9 @@ export default function PetScreen() {
   const drawingTimeoutRef = useRef(null);
   const isDrawingRef = useRef(false);
 
+  const [aiValidationResult, setAiValidationResult] = useState(null);
+  const [isValidatingImage, setIsValidatingImage] = useState(false);
+
   const [hasDraft, setHasDraft] = useState(false);
   const [showDraftPrompt, setShowDraftPrompt] = useState(false);
 
@@ -197,6 +200,12 @@ export default function PetScreen() {
     if (!uri) {
       return "Pet photo is required";
     }
+
+    // Check AI validation result if available
+    if (aiValidationResult && !aiValidationResult.isValid) {
+      return "Please upload a clear photo of a dog or cat";
+    }
+
     return null;
   };
 
@@ -273,18 +282,15 @@ export default function PetScreen() {
       color: "",
       photoUrl: "",
       distinguishingMarks: "",
-
       ownerId: "",
       ownerName: "",
       ownerPhone: "",
       ownerEmail: "",
       ownerAddress: "",
       ownerSignature: "",
-
       vaccinations: [],
       allergies: "",
       medicalNotes: "",
-
       certificate: {
         number: "",
         url: "",
@@ -302,6 +308,9 @@ export default function PetScreen() {
     isDrawingRef.current = false;
     setFieldErrors({});
     setIsSubmitting(false);
+    setAiValidationResult(null); // Clear AI validation
+    setAiAnalysisResult(null); // Clear AI analysis
+    setShowAIOptions(false); // Close AI options modal
     if (drawingTimeoutRef.current) {
       clearTimeout(drawingTimeoutRef.current);
     }
@@ -425,7 +434,7 @@ export default function PetScreen() {
               {message}
             </CustomText>
 
-            <View style={tw`space-y-3`}>
+            <View>
               <TouchableOpacity
                 onPress={() => handleDraftAction("load")}
                 style={tw`bg-orange-500 py-4 rounded-xl active:bg-orange-600 mb-2`}
@@ -538,6 +547,11 @@ export default function PetScreen() {
 
     const photoError = validatePhotoFile(form.photoUrl);
     if (photoError) errors.photoUrl = photoError;
+
+    // Additional AI validation check
+    if (form.photoUrl && aiValidationResult && !aiValidationResult.isValid) {
+      errors.photoUrl = "Please upload a valid pet image (dog or cat only)";
+    }
 
     const phoneError = validatePhoneNumber(form.ownerPhone);
     if (phoneError) errors.ownerPhone = phoneError;
@@ -1107,26 +1121,87 @@ export default function PetScreen() {
 
       try {
         setLoading(true);
-        const url = await CloudinaryService.uploadFile(asset.uri, "image");
+        setIsValidatingImage(true);
 
-        // Set the photo URL first
-        setForm({ ...form, photoUrl: url });
+        // First, validate the image with AI
+        const validationResult = await validateImageWithAI(asset.uri);
 
-        if (fieldErrors.photoUrl) {
-          setFieldErrors((prev) => {
-            const newErrors = { ...prev };
-            delete newErrors.photoUrl;
-            return newErrors;
-          });
+        if (validationResult.isValid) {
+          // Image is valid, proceed with upload
+          const url = await CloudinaryService.uploadFile(asset.uri, "image");
+
+          // Set the photo URL first
+          setForm({ ...form, photoUrl: url });
+
+          if (fieldErrors.photoUrl) {
+            setFieldErrors((prev) => {
+              const newErrors = { ...prev };
+              delete newErrors.photoUrl;
+              return newErrors;
+            });
+          }
+
+          // Show AI analysis options for auto-fill
+          setShowAIOptions(true);
+
+          // Store the validation result for display
+          setAiValidationResult(validationResult);
+        } else {
+          // Image is not a valid pet
+          showFeedback("error", "Please upload a clear photo of a dog or cat.");
         }
-
-        // Show AI analysis options
-        setShowAIOptions(true);
       } catch (error) {
-        showFeedback("error", "Failed to upload image. Please try again.");
+        showFeedback("error", "Failed to validate image. Please try again.");
       } finally {
         setLoading(false);
+        setIsValidatingImage(false);
       }
+    }
+  };
+
+  const validateImageWithAI = async (imageUri) => {
+    try {
+      // Upload image to get URL for analysis
+      const imageUrl = await CloudinaryService.uploadFile(imageUri, "image");
+
+      // Analyze the image using the same service as pet registration
+      const analysis = await PetImageAnalysisService.analyzePetImage(imageUrl);
+      console.log("AI Validation Result:", analysis);
+
+      // Check if the image is actually a pet (dog or cat)
+      if (
+        analysis.species &&
+        (analysis.species === "Dog" || analysis.species === "Cat")
+      ) {
+        return {
+          isValid: true,
+          species: analysis.species,
+          breed: analysis.breed,
+          confidence: analysis.confidence?.species || "medium",
+          message: `Great! This appears to be a ${analysis.species}${
+            analysis.breed && analysis.breed !== "Unknown"
+              ? ` (likely ${analysis.breed})`
+              : ""
+          }`,
+          analysis: analysis, // Store full analysis for later use
+        };
+      } else {
+        // Not a valid pet image
+        return {
+          isValid: false,
+          species: analysis.species || "Unknown",
+          message:
+            "This doesn't appear to be a dog or cat. Please upload a clear photo of a pet.",
+          analysis: analysis,
+        };
+      }
+    } catch (error) {
+      console.error("AI Validation error:", error);
+      return {
+        isValid: false,
+        error: error.message,
+        message: "AI validation failed. Please ensure it's a clear pet photo.",
+      };
     }
   };
 
@@ -1145,20 +1220,16 @@ export default function PetScreen() {
         "Analyzing image with AI... This may take a moment."
       );
 
-      // Debug: Check what PetImageAnalysisService is
-      console.log(
-        "DEBUG: PetImageAnalysisService type:",
-        typeof PetImageAnalysisService
-      );
-      console.log(
-        "DEBUG: PetImageAnalysisService methods:",
-        Object.keys(PetImageAnalysisService)
-      );
+      // Use cached validation result if available, otherwise fetch new analysis
+      let analysis;
+      if (aiValidationResult?.isValid && aiValidationResult.analysis) {
+        analysis = aiValidationResult.analysis;
+        console.log("DEBUG: Using cached analysis:", analysis);
+      } else {
+        analysis = await PetImageAnalysisService.analyzePetImage(form.photoUrl);
+        console.log("DEBUG: New analysis received:", analysis);
+      }
 
-      const analysis = await PetImageAnalysisService.analyzePetImage(
-        form.photoUrl
-      );
-      console.log("DEBUG: Analysis received:", analysis);
       setAiAnalysisResult(analysis);
 
       // Show modal with AI suggestions
@@ -1173,6 +1244,62 @@ export default function PetScreen() {
     } finally {
       setIsAnalyzingImage(false);
     }
+  };
+
+  const AIVisualIndicator = () => {
+    if (!aiValidationResult || !form.photoUrl) return null;
+
+    return (
+      <View
+        style={tw`mt-3 p-3 rounded-xl ${
+          aiValidationResult.isValid
+            ? "bg-green-50 border border-green-200"
+            : "bg-red-50 border border-red-200"
+        }`}
+      >
+        <View style={tw`flex-row items-center`}>
+          <Ionicons
+            name={
+              aiValidationResult.isValid ? "checkmark-circle" : "alert-circle"
+            }
+            size={16}
+            color={aiValidationResult.isValid ? "#10b981" : "#ef4444"}
+          />
+          <CustomText
+            style={tw`ml-2 text-xs pr-2 ${
+              aiValidationResult.isValid ? "text-green-700" : "text-red-700"
+            }`}
+          >
+            {aiValidationResult.message}
+          </CustomText>
+        </View>
+
+        {aiValidationResult.isValid && aiValidationResult.confidence && (
+          <View style={tw`mt-2 flex-row items-center`}>
+            <Ionicons
+              name={
+                aiValidationResult.confidence === "high"
+                  ? "shield-checkmark"
+                  : aiValidationResult.confidence === "medium"
+                  ? "information-circle"
+                  : "warning"
+              }
+              size={16}
+              color={
+                aiValidationResult.confidence === "high"
+                  ? "#10b981"
+                  : aiValidationResult.confidence === "medium"
+                  ? "#f59e0b"
+                  : "#ef4444"
+              }
+            />
+            <CustomText style={tw`ml-2 text-xs text-gray-600`}>
+              Confidence: {aiValidationResult.confidence}
+            </CustomText>
+          </View>
+        )}
+      </View>
+    );
   };
 
   const applyAISuggestions = (selectedFields = "all") => {
@@ -1366,11 +1493,11 @@ export default function PetScreen() {
                 <View style={tw`space-y-3`}>
                   <TouchableOpacity
                     onPress={() => applyAISuggestions("all")}
-                    style={tw`bg-orange-500 py-4 rounded-xl active:bg-orange-600`}
+                    style={tw`bg-orange-500 py-4 rounded-xl active:bg-orange-600 mb-4`}
                   >
                     <CustomText
                       weight="SemiBold"
-                      style={tw`text-white text-center`}
+                      style={tw`text-white text-sm text-center`}
                     >
                       Apply All Suggestions
                     </CustomText>
@@ -1382,7 +1509,7 @@ export default function PetScreen() {
                   >
                     <CustomText
                       weight="SemiBold"
-                      style={tw`text-gray-700 text-center`}
+                      style={tw`text-gray-700 text-sm text-center`}
                     >
                       Fill Manually Instead
                     </CustomText>
@@ -1406,11 +1533,11 @@ export default function PetScreen() {
                 <View style={tw`space-y-3`}>
                   <TouchableOpacity
                     onPress={analyzeImageWithAI}
-                    style={tw`bg-orange-500 py-4 rounded-xl active:bg-orange-600`}
+                    style={tw`bg-orange-500 py-4 rounded-xl active:bg-orange-600 mb-4`}
                   >
                     <CustomText
                       weight="SemiBold"
-                      style={tw`text-white text-center`}
+                      style={tw`text-white text-sm text-center`}
                     >
                       Yes, Analyze with AI
                     </CustomText>
@@ -1422,7 +1549,7 @@ export default function PetScreen() {
                   >
                     <CustomText
                       weight="SemiBold"
-                      style={tw`text-gray-700 text-center`}
+                      style={tw`text-gray-700 text-sm text-center`}
                     >
                       No, I'll Fill Manually
                     </CustomText>
@@ -1952,38 +2079,66 @@ export default function PetScreen() {
         </View>
 
         <CustomText style={tw`text-gray-600 text-xs mb-3`}>
-          Upload a clear photo for better AI analysis
+          Upload a clear photo of a dog or cat for AI analysis
         </CustomText>
 
         <TouchableOpacity
           onPress={handlePickImage}
+          disabled={loading || isValidatingImage}
           style={tw`border-2 border-orange-400 rounded-3xl items-center justify-center mb-6 ${
             form.photoUrl ? "border-0" : ""
-          }`}
+          } ${loading || isValidatingImage ? "opacity-50" : ""}`}
         >
           {form.photoUrl ? (
-            <Image
-              source={{ uri: form.photoUrl }}
-              style={tw`w-full h-58 rounded-2xl`}
-              resizeMode="cover"
-            />
+            <View style={tw`w-full relative`}>
+              <Image
+                source={{ uri: form.photoUrl }}
+                style={tw`w-full h-58 rounded-2xl`}
+                resizeMode="cover"
+              />
+              {isValidatingImage && (
+                <View
+                  style={tw`absolute inset-0 bg-black/50 rounded-2xl items-center justify-center`}
+                >
+                  <ActivityIndicator size="large" color="#fff" />
+                  <CustomText style={tw`text-white mt-2 text-xs`}>
+                    AI Validating...
+                  </CustomText>
+                </View>
+              )}
+            </View>
           ) : (
             <>
-              <Ionicons
-                name="camera"
-                size={48}
-                color="#F59549"
-                style={tw`mb-2 pt-8`}
-              />
-              <CustomText weight="SemiBold" style={tw`text-sm mb-1`}>
-                Upload pet photo
-              </CustomText>
-              <CustomText style={tw`text-red-500 text-xs pb-8`}>
-                Required
-              </CustomText>
+              {isValidatingImage ? (
+                <View style={tw`py-20 items-center`}>
+                  <ActivityIndicator size="large" color="#F59549" />
+                  <CustomText style={tw`mt-4 text-xs text-gray-600`}>
+                    AI Validating Image...
+                  </CustomText>
+                </View>
+              ) : (
+                <>
+                  <Ionicons
+                    name="camera"
+                    size={48}
+                    color="#F59549"
+                    style={tw`mb-2 pt-8`}
+                  />
+                  <CustomText weight="SemiBold" style={tw`text-sm mb-1`}>
+                    Upload pet photo
+                  </CustomText>
+                  <CustomText style={tw`text-red-500 text-xs pb-8`}>
+                    Required
+                  </CustomText>
+                </>
+              )}
             </>
           )}
         </TouchableOpacity>
+
+        {/* Add AI validation indicator */}
+        <AIVisualIndicator />
+
         {fieldErrors.photoUrl && (
           <CustomText style={tw`text-red-500 text-xs mt-1 ml-1 -mt-4 mb-4`}>
             {fieldErrors.photoUrl}
